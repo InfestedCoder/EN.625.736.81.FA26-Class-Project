@@ -10,7 +10,10 @@ library(readxl)
 library(dplyr)
 library(writexl)
 
-input_file <- "C:/Users/daphne/Documents/JHU/Combinatorial Optimization/eczema_project/Supplementary spreadsheet 1.xlsx"
+project_dir <- "."
+output_dir <- file.path(project_dir, "Output")
+dir.create(output_dir, showWarnings = FALSE)
+input_file <- file.path(project_dir, "Resources", "Supplementary spreadsheet 1.xlsx")
 stopifnot(file.exists(input_file))
 ```
 
@@ -89,8 +92,6 @@ LCN2
 
 
 ```{r}
-output_dir <- "C:/Users/daphne/Documents/JHU/Combinatorial Optimization/eczema_project"
-
 write.csv(
   proteins,
   file.path(output_dir, "eczema_143_proteins_R.csv"),
@@ -129,10 +130,8 @@ cat("\nDone: created cleaned CSV, STRING gene list, and Excel workbook\n")
 library(STRINGdb)
 
 # import cleaned protein data
-project_dir <- "C:/Users/daphne/Documents/JHU/Combinatorial Optimization/eczema_project"
-
 proteins <- read.csv(
-  file.path(project_dir, "eczema_143_proteins_R.csv")
+  file.path(output_dir, "eczema_143_proteins_R.csv")
 )
 
 stopifnot(nrow(proteins) == 143)
@@ -158,7 +157,7 @@ mapped <- string_db$map(
 
 write.csv(
   mapped,
-  file.path(project_dir, "STRING_protein_mapping.csv"),
+  file.path(output_dir, "STRING_protein_mapping.csv"),
   row.names = FALSE
 )
 
@@ -214,14 +213,7 @@ results <- results[
 # all interactions
 write.csv(
   results,
-  file.path(project_dir, "STRING_interactions_400.csv"),
-  row.names = FALSE
-)
-
-# 64 bipartite interactions=
-write.csv(
-  bipartite_edges,
-  file.path(project_dir, "STRING_bipartite_edges_400.csv"),
+  file.path(output_dir, "STRING_interactions_400.csv"),
   row.names = FALSE
 )
 
@@ -251,6 +243,13 @@ groups <- setNames(
 bipartite_edges <- results[
   groups[results$gene_A] != groups[results$gene_B],
 ]
+
+write.csv(
+  bipartite_edges,
+  file.path(output_dir, "STRING_bipartite_edges_400.csv"),
+  row.names = FALSE
+)
+
 cat("Bipartite interactions:", nrow(bipartite_edges), "\n")
 ```
 
