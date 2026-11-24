@@ -1,0 +1,256 @@
+---
+title: "736_proj_code"
+author: "Daphne Shaw"
+date: "2026-11-21"
+output: pdf_document
+---
+
+```{r}
+library(readxl)
+library(dplyr)
+library(writexl)
+
+input_file <- "C:/Users/daphne/Documents/JHU/Combinatorial Optimization/eczema_project/Supplementary spreadsheet 1.xlsx"
+stopifnot(file.exists(input_file))
+```
+
+```{r}
+# Importing original 143 proteins from spreadsheet
+original <- read_excel(input_file, sheet = "S1 PN FL vs. PN deltaCTD Upreg")
+
+eczema_genes <- c(
+  "S100A7", "S100A8", "S100A9", "SDC1", "SDC4",
+  "CSTA", "HMOX1", "HSP90AA1", "LCN2"
+)
+
+proteins <- original %>%
+  transmute(
+    gene_symbol = trimws(as.character(`Gene Symbol`)),
+    uniprot_accession = trimws(as.character(Accession)),
+    protein_name = sub(" OS=.*$", "", Description),
+    abundance_ratio_FL_vs_DeltaCTD = `Abundance Ratio: (FL) / (DELTA CTR)`,
+    adjusted_p_value = `Abundance Ratio Adj. P-Value: (FL) / (DELTA CTR)`,
+    peptides = `# Peptides`,
+    unique_peptides = `# Unique Peptides`,
+    psms = `# PSMs`,
+    biological_process = `Biological Process`,
+    cellular_component = `Cellular Component`,
+    molecular_function = `Molecular Function`,
+    # assign graph partitions
+    disease_group = if_else(gene_symbol %in% eczema_genes,
+                            "Eczema/psoriasis", "Other"),
+    # keep OG experimental classification
+    experimental_class = if_else(
+      as.character(`Exclusively found in PN FL samples`) %in% c("TRUE", "True", "1"),
+      "Exclusive to PN FL", "Enriched in PN FL"
+    )
+  )
+
+```
+
+```{r}
+# Check identifier quality without dropping proteins
+missing_symbols <- sum(is.na(proteins$gene_symbol) | proteins$gene_symbol == "")
+missing_accessions <- sum(is.na(proteins$uniprot_accession) | proteins$uniprot_accession == "")
+duplicate_symbols <- sum(duplicated(proteins$gene_symbol))
+duplicate_accessions <- sum(duplicated(proteins$uniprot_accession))
+
+cat("Total protein rows:", nrow(proteins), "\n")
+cat("Missing gene symbols:", missing_symbols, "\n")
+cat("Missing UniProt accessions:", missing_accessions, "\n")
+cat("Duplicate gene symbols:", duplicate_symbols, "\n")
+cat("Duplicate UniProt accessions:", duplicate_accessions, "\n\n")
+cat("Disease grouping:\n")
+print(table(proteins$disease_group))
+cat("\nExperimental grouping:\n")
+print(table(proteins$experimental_class))
+
+# Matching list to study
+stopifnot(
+  nrow(proteins) == 143,
+  missing_symbols == 0,
+  missing_accessions == 0,
+  duplicate_symbols == 0,
+  duplicate_accessions == 0,
+  sum(proteins$disease_group == "Eczema/psoriasis") == 9,
+  sum(proteins$experimental_class == "Exclusive to PN FL") == 54
+)
+```
+List of study identified 9 proteins associated with eczema/psoriasis:
+S100A7
+S100A8
+S100A9
+SDC1
+SDC4
+CSTA
+HMOX1
+HSP90AA1
+LCN2
+
+
+```{r}
+output_dir <- "C:/Users/daphne/Documents/JHU/Combinatorial Optimization/eczema_project"
+
+write.csv(
+  proteins,
+  file.path(output_dir, "eczema_143_proteins_R.csv"),
+  row.names = FALSE,
+  na = ""
+)
+
+# Export gene symbols for STRING (you can upload this file to STRING website to double check too)
+writeLines(
+  proteins$gene_symbol,
+  file.path(output_dir, "eczema_143_proteins_STRING_R.txt")
+)
+
+writexl::write_xlsx(
+  list(
+    all_143_proteins = proteins,
+    disease_associated_9 = filter(proteins, disease_group == "Eczema/psoriasis"),
+    other_134 = filter(proteins, disease_group == "Other")
+  ),
+  path = file.path(output_dir, "eczema_protein_analysis_R.xlsx")
+)
+
+cat("\nDone: created cleaned CSV, STRING gene list, and Excel workbook\n")
+```
+```{r}
+#Install BiocManager, then run this to install STRINGdb into your R studio
+
+#library(BiocManager)
+#BiocManager::install("STRINGdb")
+```
+
+
+```{r}
+# STEP 2: Retrieve STRING protein interactions
+# Note that this will take a while to run since it's downloading data. Run this block with internet connection!!
+library(STRINGdb)
+
+# import cleaned protein data
+project_dir <- "C:/Users/daphne/Documents/JHU/Combinatorial Optimization/eczema_project"
+
+proteins <- read.csv(
+  file.path(project_dir, "eczema_143_proteins_R.csv")
+)
+
+stopifnot(nrow(proteins) == 143)
+
+# STRING database initialization
+# Typically, the high confidence score used is 700. But I only got 11 bipartite interactions with that, so lowering to default medium confidence of 400.
+score_threshold <- 400
+
+string_db <- STRINGdb$new(
+  version = "12.5",
+  species = 9606,
+  score_threshold = score_threshold,
+  network_type = "full"
+)
+
+# Map gene symbols to STRING ID
+mapped <- string_db$map(
+  proteins,
+  "gene_symbol",
+  takeFirst = TRUE,
+  removeUnmappedRows = FALSE
+)
+
+write.csv(
+  mapped,
+  file.path(project_dir, "STRING_protein_mapping.csv"),
+  row.names = FALSE
+)
+
+# Successful mapped proteins
+mapped_ok <- mapped[
+  !is.na(mapped$STRING_id) & mapped$STRING_id != "",
+]
+
+cat("Mapped proteins:", nrow(mapped_ok), "\n")
+cat("Unmapped proteins:",
+    nrow(mapped) - nrow(mapped_ok), "\n")
+
+# Stop if genes map to same STRING ID
+if (anyDuplicated(mapped_ok$STRING_id)) {
+  stop("Duplicate STRING IDs found. Review the mapping.")
+}
+
+# Interactions among mapped proteins
+interactions <- string_db$get_interactions(
+  mapped_ok$STRING_id
+)
+
+# attach gene names and confidence scores
+lookup <- setNames(
+  mapped_ok$gene_symbol,
+  mapped_ok$STRING_id
+)
+
+results <- data.frame(
+  gene_A = unname(lookup[interactions$from]),
+  gene_B = unname(lookup[interactions$to]),
+  STRING_id_A = interactions$from,
+  STRING_id_B = interactions$to,
+  combined_score = interactions$combined_score,
+  confidence_score = interactions$combined_score / 1000
+)
+
+# removing self interactions and duplicate undirected interactions
+results <- results[
+  results$STRING_id_A != results$STRING_id_B,
+]
+pair_key <- paste(
+  pmin(results$STRING_id_A, results$STRING_id_B),
+  pmax(results$STRING_id_A, results$STRING_id_B),
+  sep = "|"
+)
+
+results <- results[!duplicated(pair_key), ]
+results <- results[
+  order(-results$combined_score),
+]
+
+# all interactions
+write.csv(
+  results,
+  file.path(project_dir, "STRING_interactions_400.csv"),
+  row.names = FALSE
+)
+
+# 64 bipartite interactions=
+write.csv(
+  bipartite_edges,
+  file.path(project_dir, "STRING_bipartite_edges_400.csv"),
+  row.names = FALSE
+)
+
+cat("Total STRING interactions:", nrow(results), "\n")
+cat("Step 2 completed.\n")
+
+```
+```{r}
+# Unmapped proteins check
+unmapped <- mapped[
+  is.na(mapped$STRING_id) | mapped$STRING_id == "",
+  c("gene_symbol", "uniprot_accession")
+]
+print(unmapped)
+# Can investigate this further if we want to, but these aren't the nine proteins that are associated with eczema
+```
+
+```{r}
+# 146 interactions connecting to two groups
+# Match each gene to disease classification
+groups <- setNames(
+  proteins$disease_group,
+  proteins$gene_symbol
+)
+
+# Keep only edges connecting diff groups
+bipartite_edges <- results[
+  groups[results$gene_A] != groups[results$gene_B],
+]
+cat("Bipartite interactions:", nrow(bipartite_edges), "\n")
+```
+
